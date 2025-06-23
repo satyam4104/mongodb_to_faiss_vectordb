@@ -9,6 +9,7 @@ from langchain.chains import RetrievalQA
 import uuid
 import psycopg2
 from sqlalchemy import create_engine
+import json
 
 # Step 1: Connect to MongoDB (running locally)
 mongo_client = pymongo.MongoClient("mongodb://localhost:27017/")
@@ -23,6 +24,7 @@ def load_mongo_documents():
     cursor = collection.find()
     documents = []
     for doc in cursor:
+        # Extract the skill field for embedding
         skill = doc.get("skill", "")
         if isinstance(skill, list):
             content = ", ".join(str(s) for s in skill if s)
@@ -30,9 +32,23 @@ def load_mongo_documents():
             content = str(skill) if skill is not None else ""
         else:
             content = skill
-        metadata = {"source": str(doc.get("_id", str(uuid.uuid4())))}
+
+        # Prepare metadata with the full document
+        # Remove the '_id' field if it's an ObjectId to avoid serialization issues
+        doc_metadata = {k: v for k, v in doc.items() if k != '_id'}
+        # Convert any non-serializable types to strings (e.g., ObjectId, datetime)
+        for key, value in doc_metadata.items():
+            if not isinstance(value, (str, int, float, bool, list, dict, type(None))):
+                doc_metadata[key] = str(value)
+        metadata = {
+            "source": str(doc.get("_id", str(uuid.uuid4()))),
+            "full_document": json.dumps(doc_metadata)  # Store full document as a JSON string
+        }
+
+        # Create Document only if content is non-empty
         if content.strip():
             documents.append(Document(page_content=content, metadata=metadata))
+    
     if not documents:
         raise ValueError("No valid documents to process")
     return documents
@@ -61,7 +77,6 @@ print("hi4")
 print(embeddings)
 
 # Step 5: Connect to PostgreSQL and store vectors using PGVector
-# Replace these with your PostgreSQL credentials
 CONNECTION_STRING = "postgresql+psycopg2://postgres:1331@localhost:5432/vector_db"
 COLLECTION_NAME = "resume_vectors"
 
@@ -70,11 +85,11 @@ print("hi5")
 # Create the PostgreSQL table with pgvector extension if not exists
 def initialize_postgres():
     conn = psycopg2.connect(
-        host="localhost",        # Database host
-        port="5432",            # Default PostgreSQL port
-        database="vector_db",        # Replace with your database name
-        user="postgres",        # Replace with your username
-        password="1331" # Replace with your password
+        host="localhost",
+        port="5432",
+        database="vector_db",
+        user="postgres",
+        password="1331"
     )
     cursor = conn.cursor()
     cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
@@ -131,7 +146,12 @@ def query_rag(question):
     result = qa_chain.invoke({"query": question})
     return {
         "answer": result["result"],
-        "source_documents": [doc.page_content for doc in result["source_documents"]]
+        "source_documents": [
+            {
+                "content": doc.page_content,
+                "metadata": json.loads(doc.metadata["full_document"])  # Parse JSON string back to dict
+            } for doc in result["source_documents"]
+        ]
     }
 
 print("hi12")
@@ -143,4 +163,5 @@ if __name__ == "__main__":
     print("Answer:", response["answer"])
     print("\nSource Documents:")
     for doc in response["source_documents"]:
-        print(doc[:200] + "..." if len(doc) > 200 else doc)
+        print("Content:", doc["content"][:200] + "..." if len(doc["content"]) > 200 else doc["content"])
+        print("Metadata:", doc["metadata"])
