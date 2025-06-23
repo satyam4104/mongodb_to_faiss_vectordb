@@ -24,28 +24,33 @@ def load_mongo_documents():
     cursor = collection.find()
     documents = []
     for doc in cursor:
-        # Extract the skill field for embedding
-        skill = doc.get("skill", "")
-        if isinstance(skill, list):
-            content = ", ".join(str(s) for s in skill if s)
-        elif not isinstance(skill, str):
-            content = str(skill) if skill is not None else ""
-        else:
-            content = skill
+        # Extract all fields for page_content
+        content_parts = []
+        for key, value in doc.items():
+            if key == '_id':
+                continue
+            if isinstance(value, list):
+                formatted_value = ", ".join(str(v) for v in value if v)
+            elif isinstance(value, dict):
+                formatted_value = json.dumps(value)
+            elif value is None:
+                formatted_value = ""
+            else:
+                formatted_value = str(value)
+            if formatted_value.strip():
+                content_parts.append(f"{key}: {formatted_value}")
+        content = "\n".join(content_parts) if content_parts else ""
 
         # Prepare metadata with the full document
-        # Remove the '_id' field if it's an ObjectId to avoid serialization issues
         doc_metadata = {k: v for k, v in doc.items() if k != '_id'}
-        # Convert any non-serializable types to strings (e.g., ObjectId, datetime)
         for key, value in doc_metadata.items():
             if not isinstance(value, (str, int, float, bool, list, dict, type(None))):
                 doc_metadata[key] = str(value)
         metadata = {
             "source": str(doc.get("_id", str(uuid.uuid4()))),
-            "full_document": json.dumps(doc_metadata)  # Store full document as a JSON string
+            "full_document": json.dumps(doc_metadata)
         }
 
-        # Create Document only if content is non-empty
         if content.strip():
             documents.append(Document(page_content=content, metadata=metadata))
     
